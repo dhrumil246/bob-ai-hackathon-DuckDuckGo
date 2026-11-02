@@ -1,0 +1,100 @@
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: "Regenerate the API snapshots and commit them to this branch"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  USE_MOCK_LLM: "true"          # tests never call a model provider or spend quota
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  contract:
+    name: API contract
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.update_snapshots) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies (CPU-only PyTorch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+      - name: Contract and behaviour snapshots
+        run: pytest tests/contract -q -p no:cacheprovider
+
+  unit:
+    name: Existing unit tests (informational)
+    if: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Not yet required: these predate CI and some may depend on local tools.
+    # Each failure gets triaged, then this job becomes required. See PLAN.md, week 1.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies (CPU-only PyTorch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+      - name: Unit tests
+        run: pytest src -q -p no:cacheprovider -rA
+
+  update-snapshots:
+    name: Regenerate API snapshots
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.update_snapshots }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write             # commits the regenerated snapshots to this branch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies (CPU-only PyTorch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+      - name: Record snapshots
+        env:
+          UPDATE_SNAPSHOTS: "1"
+        run: pytest tests/contract -q -p no:cacheprovider
+      - name: Commit snapshots
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/contract/snapshots
+          if git diff --cached --quiet; then
+            echo "Snapshots unchanged."
+          else
+            git commit -m "test: regenerate API snapshots (${GITHUB_SHA::7})"
+            git push
+          fi
