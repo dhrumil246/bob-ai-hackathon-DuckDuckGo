@@ -28,3 +28,4 @@ ibm-watsonx-ai>=0.1.0          # watsonx.ai Granite (legacy fallback)
 # API layer
 fastapi>=0.110.0
 uvicorn>=0.29.0
+python-multipart>=0.0.9        # file uploads; previously arrived only as a dependency of mcp
